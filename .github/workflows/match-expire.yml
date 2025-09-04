@@ -11,10 +11,14 @@ jobs:
     steps:
       - name: Call /api/system/matches/expire
         run: |
-          curl -sS -X POST "$CRON_URL" \
+          set -e
+          echo "Pinging $CRON_URL"
+          curl -sS -X POST "$CRON_URL/api/system/matches/expire" \
             -H "Authorization: Bearer $SYSTEM_CRON_SECRET" \
             -H "Content-Type: application/json" \
-            -d '{}'
+            -d '{}' \
+            --fail --retry 3 --retry-connrefused --connect-timeout 10 | tee /tmp/resp.json
+          echo "::notice title=Expire Result::$(cat /tmp/resp.json)"
         env:
-          CRON_URL: ${{ secrets.CRON_URL }}
+          CRON_URL: ${{ vars.PROD_URL }}
           SYSTEM_CRON_SECRET: ${{ secrets.SYSTEM_CRON_SECRET }}
