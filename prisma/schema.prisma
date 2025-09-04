@@ -1,0 +1,254 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum GameMode {
+  ONE_V_ONE
+  TWO_V_TWO
+  THREE_V_THREE
+}
+
+enum MatchState {
+  OPEN
+  FULL
+  COMPLETE
+  CANCELLED
+}
+
+enum Role {
+  PLAYER
+  REF
+}
+
+enum Team {
+  A
+  B
+  NONE
+}
+
+enum DepositProvider {
+  solflare
+  coinbase
+  phantom // 👈 added
+  other // 👈 added
+}
+
+/**
+ * NEW: deposit intent lifecycle
+ */
+enum DepositIntentStatus {
+  PENDING
+  CREDITED
+  EXPIRED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  handle    String   @unique
+  createdAt DateTime @default(now())
+
+  // --- Profile fields ---
+  displayName String?
+  epicId      String  @unique
+  avatarUrl   String?
+
+  // Simple wallet in WT (1$ = 10 WT)
+  availableWT Int @default(0)
+  lockedWT    Int @default(0)
+
+  // --- Roles ---
+  isRef   Boolean @default(false)
+  isOwner Boolean @default(false)
+
+  // Linked wallets
+  wallets Wallet[]
+
+  // Relations
+  participations MatchParticipant[]
+  createdMatches Match[]            @relation("refCreated")
+  wonMatches     Match[]            @relation("matchWinner")
+  deposits       Deposit[]
+  withdrawals    Withdrawal[]
+  depositIntents DepositIntent[] // 👈 intents created by the user
+
+  // Ledger
+  account LedgerAccount?
+  entries LedgerEntry[]
+
+  // --- Auth ---
+  credentials Credentials?
+  sessions    Session[]
+
+  @@index([handle])
+  @@index([isRef])
+}
+
+model Wallet {
+  id        String          @id @default(cuid())
+  userId    String
+  chain     String          @default("solana")
+  provider  DepositProvider
+  address   String
+  createdAt DateTime        @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([chain, address], name: "chain_address")
+  @@index([userId, provider])
+}
+
+model Match {
+  id        String     @id @default(cuid())
+  mode      GameMode
+  stakeWT   Int
+  state     MatchState @default(OPEN)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Ref who created the lobby
+  refId String
+  ref   User   @relation("refCreated", fields: [refId], references: [id])
+
+  // Winner (set by ref after match)
+  winnerUserId String?
+  winner       User?   @relation("matchWinner", fields: [winnerUserId], references: [id])
+
+  participants MatchParticipant[]
+}
+
+model MatchParticipant {
+  id       String   @id @default(cuid())
+  matchId  String
+  userId   String
+  role     Role     @default(PLAYER)
+  team     Team     @default(NONE)
+  joinedAt DateTime @default(now())
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, userId])
+  @@index([userId])
+}
+
+model Deposit {
+  id       String          @id @default(cuid())
+  userId   String
+  provider DepositProvider
+
+  // On-chain
+  txHash     String @unique
+  fromAddr   String
+  toAddr     String
+  amountUSDC Int // 👈 micro-USDC (1 USDC = 1_000_000)
+
+  // WT credit snapshot (derived from amountUSDC at credit time)
+  amountWT Int
+
+  status    String   @default("CREDITED")
+  createdAt DateTime @default(now())
+
+  user           User            @relation(fields: [userId], references: [id])
+  depositIntents DepositIntent[] // back-relation to credited intents (optional)
+
+  @@index([userId, createdAt])
+  @@index([fromAddr])
+  @@index([toAddr])
+}
+
+model Withdrawal {
+  id       String          @id @default(cuid())
+  userId   String
+  provider DepositProvider
+  address  String
+
+  amountWT   Int // requested WT
+  amountUSDC Int // 👈 micro-USDC actually sent
+
+  status    String   @default("PAID")
+  txHash    String?  @unique
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([address])
+}
+
+model DepositIntent {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Amounts — store both for convenience
+  amountUSD Int // USD cents (e.g. $12.50 => 1250)
+  amountWT  Int // 10 WT = $1
+
+  // Solana Pay reference (unique)
+  reference String @unique
+
+  // Lifecycle
+  status    DepositIntentStatus @default(PENDING)
+  createdAt DateTime            @default(now())
+  expiresAt DateTime
+
+  // Filled on success
+  txHash            String?  @unique
+  creditedDepositId String?
+  deposit           Deposit? @relation(fields: [creditedDepositId], references: [id])
+
+  // Optional metadata (provider label, wallet addr used, etc.)
+  meta Json?
+
+  @@index([userId, status, expiresAt])
+}
+
+model LedgerAccount {
+  userId    String @id
+  available Int    @default(0)
+  locked    Int    @default(0)
+  user      User   @relation(fields: [userId], references: [id])
+}
+
+model LedgerEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  delta     Int
+  kind      String
+  refId     String?
+  meta      Json?
+  createdAt DateTime @default(now())
+}
+
+model Credentials {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+
+  @@index([userId])
+}

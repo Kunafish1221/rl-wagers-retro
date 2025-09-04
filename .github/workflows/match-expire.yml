@@ -1,0 +1,20 @@
+name: Expire stale matches (every 5 min)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-expire:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/system/matches/expire
+        run: |
+          curl -sS -X POST "$CRON_URL" \
+            -H "Authorization: Bearer $SYSTEM_CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+        env:
+          CRON_URL: ${{ secrets.CRON_URL }}
+          SYSTEM_CRON_SECRET: ${{ secrets.SYSTEM_CRON_SECRET }}
