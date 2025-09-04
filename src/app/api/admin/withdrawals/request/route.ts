@@ -1,3 +1,4 @@
+// src/app/api/admin/withdrawals/request/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/app/server/prisma'
 import { requireSession } from '@/app/server/session'
@@ -19,11 +20,17 @@ function ok(json: any) {
 type Body = {
   provider: 'solflare' | 'coinbase'
   address: string
-  amountWT: number        // integer WT; 10 WT = $1
+  amountWT: number        // integer WT; adjust WT_PER_USDC below to match your tokenomics
   note?: string
 }
 
 const WITHDRAW_LOCK_KIND = 'WITHDRAW_LOCK' // audit taxonomy
+
+// --- money helpers ---
+const MICRO_PER_USDC = 1_000_000; // USDC has 6 decimals
+const WT_PER_USDC = 100;          // ⬅️ if 100 WT == $1; change if your ratio differs
+const wtToUsdcMicro = (wt: number): number =>
+  Math.max(0, Math.floor((wt / WT_PER_USDC) * MICRO_PER_USDC))
 
 export async function POST(req: NextRequest) {
   const gate = await requireSession(req)
@@ -80,16 +87,20 @@ export async function POST(req: NextRequest) {
         },
       })
 
-      // Create withdrawal record (String status in schema; use "REQUESTED")
+      // Create withdrawal record (schema requires amountUSDC)
       const wd = await tx.withdrawal.create({
         data: {
           userId,
           provider: provider as any,
           address: addressRaw,
           amountWT,
+          amountUSDC: wtToUsdcMicro(amountWT), // ✅ micro-USDC
           status: 'REQUESTED',
         },
-        select: { id: true, userId: true, provider: true, address: true, amountWT: true, status: true, createdAt: true },
+        select: {
+          id: true, userId: true, provider: true, address: true,
+          amountWT: true, amountUSDC: true, status: true, createdAt: true
+        },
       })
 
       return wd
